@@ -1,0 +1,161 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import type { Commitment, CommitmentPeriod, Cycle, Profile, Supporter } from "@/lib/types";
+import { addCycle, cycleLabel, formatGrapes, profileName, statusLabel, supporterName, toDateInput } from "@/lib/utils";
+
+type Props = { profile: Profile; profiles: Profile[]; supporters: Supporter[]; commitments: Commitment[]; periods: CommitmentPeriod[] };
+
+export default function CommitmentsClient({ profile, profiles, supporters, commitments, periods }: Props) {
+  const supabase = createClient();
+  const router = useRouter();
+  const [supporterId, setSupporterId] = useState(supporters[0]?.id || "");
+  const [newSupporter, setNewSupporter] = useState("");
+  const [amount, setAmount] = useState("1000");
+  const [type, setType] = useState<"one_time" | "recurring">("recurring");
+  const [cycle, setCycle] = useState<Cycle>("monthly");
+  const [startDate, setStartDate] = useState(toDateInput());
+  const [periodCount, setPeriodCount] = useState("12");
+  const [expectedDay, setExpectedDay] = useState("5");
+  const [notes, setNotes] = useState("");
+  const [message, setMessage] = useState("");
+  const supporterMap = useMemo(() => Object.fromEntries(supporters.map((s) => [s.id, s])), [supporters]);
+  const profileMap = useMemo(() => Object.fromEntries(profiles.map((p) => [p.id, p])), [profiles]);
+  const periodMap = useMemo(() => {
+    const map: Record<string, CommitmentPeriod[]> = {};
+    for (const p of periods) (map[p.commitment_id] ||= []).push(p);
+    return map;
+  }, [periods]);
+
+  const createCommitment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage("");
+    let finalSupporterId = supporterId;
+    if (newSupporter.trim()) {
+      const { data, error } = await supabase
+        .from("supporters")
+        .insert({ org_id: profile.org_id, owner_id: profile.id, name: newSupporter.trim(), support_type: type === "recurring" ? "recurring" : "one_time", cycle: type === "recurring" ? cycle : null })
+        .select("id")
+        .single();
+      if (error) return setMessage(error.message);
+      finalSupporterId = data.id;
+    }
+    if (!finalSupporterId) return setMessage("请选择或新增支持者。");
+
+    const count = type === "one_time" ? 1 : Math.max(1, Number(periodCount));
+    const grapeAmount = Number(amount);
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = addCycle(start, type === "recurring" ? cycle : null, count - 1);
+    const { data: commitment, error } = await supabase
+      .from("commitments")
+      .insert({
+        org_id: profile.org_id,
+        owner_id: profile.id,
+        supporter_id: finalSupporterId,
+        commitment_type: type,
+        grape_amount: grapeAmount,
+        cycle: type === "recurring" ? cycle : null,
+        start_date: startDate,
+        end_date: toDateInput(end),
+        total_periods: count,
+        expected_day: type === "recurring" ? Number(expectedDay) : null,
+        total_grapes: grapeAmount * count,
+        notes,
+      })
+      .select("id")
+      .single();
+    if (error) return setMessage(error.message);
+
+    const rows = Array.from({ length: count }).map((_, i) => {
+      const d = addCycle(start, type === "recurring" ? cycle : null, i);
+      if (type === "recurring" && expectedDay) d.setDate(Math.min(Number(expectedDay), 28));
+      return {
+        org_id: profile.org_id,
+        owner_id: profile.id,
+        supporter_id: finalSupporterId,
+        commitment_id: commitment.id,
+        period_no: i + 1,
+        expected_date: toDateInput(d),
+        expected_grapes: grapeAmount,
+      };
+    });
+    const { error: periodError } = await supabase.from("commitment_periods").insert(rows);
+    if (periodError) return setMessage(periodError.message);
+    router.refresh();
+  };
+
+  const markReceived = async (period: CommitmentPeriod) => {
+    const { data, error } = await supabase
+      .from("grape_receipts")
+      .insert({
+        org_id: profile.org_id,
+        owner_id: period.owner_id,
+        supporter_id: period.supporter_id,
+        commitment_id: period.commitment_id,
+        commitment_period_id: period.id,
+        received_date: toDateInput(),
+        grape_amount: period.expected_grapes,
+        receipt_method: "other",
+        source_type: "commitment",
+        status: "pending",
+      })
+      .select("id")
+      .single();
+    if (error) return alert(error.message);
+    await supabase.from("commitment_periods").update({ status: "pending_confirmation", actual_receipt_id: data.id, actual_grapes: period.expected_grapes, received_at: new Date().toISOString() }).eq("id", period.id);
+    router.refresh();
+  };
+
+  const stopPeriod = async (period: CommitmentPeriod) => {
+    await supabase.from("commitment_periods").update({ status: "stopped", stopped_at: new Date().toISOString() }).eq("id", period.id);
+    router.refresh();
+  };
+
+  const stopCommitment = async (id: string) => {
+    if (!confirm("确认停止该承诺？未确认的未来期次会标记为已停止。")) return;
+    await supabase.from("commitments").update({ status: "stopped" }).eq("id", id);
+    await supabase.from("commitment_periods").update({ status: "stopped", stopped_at: new Date().toISOString() }).eq("commitment_id", id).in("status", ["not_received", "overdue"]);
+    router.refresh();
+  };
+
+  return (
+    <>
+      <header className="page-header"><div className="page-title"><p className="eyebrow">PROMISES VS REALITY</p><h1>承诺支持</h1><p>先记录承诺，再按期次追踪实际是否收到；只有葡萄管家确认后才进入葡萄存量。</p></div></header>
+      <section className="grid grid-2">
+        <form className="card stack" onSubmit={createCommitment}>
+          <h2>新增承诺</h2>
+          <div className="form-grid">
+            <div className="field"><label>选择支持者</label><select value={supporterId} onChange={(e) => setSupporterId(e.target.value)}><option value="">不选择，使用下方新增</option>{supporters.filter((s) => s.owner_id === profile.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+            <div className="field"><label>或新增支持者</label><input className="input" value={newSupporter} onChange={(e) => setNewSupporter(e.target.value)} placeholder="支持者姓名" /></div>
+            <div className="field"><label>承诺类型</label><select value={type} onChange={(e) => setType(e.target.value as "one_time" | "recurring")}><option value="recurring">周期性</option><option value="one_time">一次性</option></select></div>
+            <div className="field"><label>每期葡萄数</label><input className="input" type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} required /></div>
+            {type === "recurring" && <><div className="field"><label>周期</label><select value={cycle} onChange={(e) => setCycle(e.target.value as Cycle)}><option value="monthly">每月</option><option value="quarterly">每季度</option><option value="half_yearly">每半年</option><option value="yearly">每年</option></select></div><div className="field"><label>期数</label><input className="input" type="number" min="1" value={periodCount} onChange={(e) => setPeriodCount(e.target.value)} /></div><div className="field"><label>预计收到日</label><input className="input" type="number" min="1" max="28" value={expectedDay} onChange={(e) => setExpectedDay(e.target.value)} /></div></>}
+            <div className="field"><label>开始日期</label><input className="input" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required /></div>
+          </div>
+          <div className="field"><label>备注</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+          {message && <div className="notice">{message}</div>}
+          <button className="btn btn-primary">保存承诺并生成期次</button>
+        </form>
+
+        <div className="card">
+          <h2>承诺列表</h2>
+          <div className="stack">
+            {commitments.map((c) => {
+              const ps = periodMap[c.id] || [];
+              const confirmed = ps.filter((p) => p.status === "confirmed").reduce((sum, p) => sum + Number(p.expected_grapes), 0);
+              return <div key={c.id} className="card" style={{ boxShadow: "none" }}><div className="btn-row" style={{ justifyContent: "space-between" }}><strong>{supporterName(supporterMap[c.supporter_id])}</strong><span className="badge">{statusLabel(c.status)}</span></div><p className="muted">{profileName(profileMap[c.owner_id])} · {cycleLabel(c.cycle)} · {formatGrapes(c.grape_amount)} × {c.total_periods} 期</p><p>已确认 {formatGrapes(confirmed)} / 承诺 {formatGrapes(c.total_grapes)}</p>{c.status === "active" && c.owner_id === profile.id && <button className="btn btn-secondary" onClick={() => stopCommitment(c.id)}>停止后续期次</button>}</div>;
+            })}
+            {commitments.length === 0 && <div className="empty">还没有承诺记录。</div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="card" style={{ marginTop: 18 }}>
+        <h2>期次计划</h2>
+        <div className="table-wrap"><table><thead><tr><th>预计日期</th><th>用户</th><th>支持者</th><th>葡萄数</th><th>状态</th><th>操作</th></tr></thead><tbody>{periods.slice(0, 80).map((p) => <tr key={p.id}><td>{p.expected_date}</td><td>{profileName(profileMap[p.owner_id])}</td><td>{supporterName(supporterMap[p.supporter_id])}</td><td>{formatGrapes(p.expected_grapes)}</td><td><span className={`badge ${p.status === "confirmed" ? "ok" : p.status === "overdue" ? "danger" : "warn"}`}>{statusLabel(p.status)}</span></td><td><div className="btn-row">{p.owner_id === profile.id && ["not_received", "overdue"].includes(p.status) && <button className="btn btn-primary" onClick={() => markReceived(p)} key="r">标记已收到</button>}{p.owner_id === profile.id && ["not_received", "overdue"].includes(p.status) && <button className="btn btn-secondary" onClick={() => stopPeriod(p)} key="s">停止</button>}</div></td></tr>)}{periods.length === 0 && <tr><td colSpan={6} className="empty">暂无期次。</td></tr>}</tbody></table></div>
+      </section>
+    </>
+  );
+}
