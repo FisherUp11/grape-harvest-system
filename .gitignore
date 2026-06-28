@@ -31,7 +31,7 @@ next-env.d.ts
 
 docs
 .venv
-supabase
+/supabase
 客户需求.m4a
 需求说明书.md
 客户需求.md
