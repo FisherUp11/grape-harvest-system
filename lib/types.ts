@@ -27,7 +27,6 @@ export type Supporter = {
   created_at: string;
   updated_at: string;
 };
-
 export type Cycle = "monthly" | "quarterly" | "half_yearly" | "yearly";
 export type CommitmentStatus = "active" | "completed" | "stopped" | "cancelled";
 export type PeriodStatus = "not_received" | "overdue" | "pending_confirmation" | "confirmed" | "stopped" | "cancelled";
@@ -66,6 +65,7 @@ export type CommitmentPeriod = {
   actual_grapes: number | null;
   status: PeriodStatus;
   received_at: string | null;
+  confirmed_by: string | null;
   confirmed_at: string | null;
   stopped_at: string | null;
   notes: string | null;
@@ -99,11 +99,98 @@ export type GrapeConsumption = {
   grape_amount: number;
   consumption_type: "fixed" | "project" | "one_time";
   description: string;
+  budget_category_id: string | null;
   status: ConsumptionStatus;
   confirmed_by: string | null;
   confirmed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ConsumptionAttachment = {
+  id: string;
+  org_id: string;
+  consumption_id: string;
+  owner_id: string;
+  file_path: string;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  created_at: string;
+};
+
+export type BudgetStatus =
+  | "draft"
+  | "pending_confirmation"
+  | "confirmed"
+  | "revision_requested"
+  | "revision_unlocked"
+  | "revision_pending_confirmation";
+
+export type BudgetPlan = {
+  id: string;
+  org_id: string;
+  owner_id: string;
+  title: string;
+  period_start: string;
+  period_end: string;
+  status: BudgetStatus;
+  version: number;
+  notes: string | null;
+  submitted_at: string | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  unlocked_by: string | null;
+  unlocked_at: string | null;
+  created_at: string;
+  updated_at: string;
+  budget_categories?: BudgetCategory[];
+};
+
+export type BudgetCategory = {
+  id: string;
+  org_id: string;
+  budget_plan_id: string;
+  owner_id: string;
+  name: string;
+  budgeted_amount: number;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BudgetCategoryUsage = {
+  category_id: string;
+  budget_plan_id: string;
+  owner_id: string;
+  org_id: string;
+  plan_status: BudgetStatus;
+  period_start: string;
+  period_end: string;
+  category_name: string;
+  budgeted_amount: number;
+  sort_order: number;
+  confirmed_consumed: number;
+  pending_consumed: number;
+};
+
+export type AuditLog = {
+  id: string;
+  org_id: string;
+  actor_id: string | null;
+  action: string;
+  entity_table: string;
+  entity_id: string | null;
+  old_data: Record<string, unknown> | null;
+  new_data: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type StorageUsageBucket = {
+  bucket_id: string;
+  object_count: number;
+  total_bytes: number;
 };
 
 export type Dictionary<T> = Record<string, T>;

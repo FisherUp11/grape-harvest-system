@@ -1,4 +1,4 @@
-import type { Cycle, Profile, Supporter } from "./types";
+import type { BudgetStatus, Cycle, Profile, Supporter } from "./types";
 
 export function formatGrapes(value: number | null | undefined) {
   const n = Number(value ?? 0);
@@ -8,6 +8,18 @@ export function formatGrapes(value: number | null | undefined) {
 export function toDateInput(date = new Date()) {
   const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return d.toISOString().slice(0, 10);
+}
+
+export function formatDateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+export function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 export function monthRange(year: number, month: number) {
@@ -76,6 +88,35 @@ export function statusLabel(status: string) {
     pending_confirmation: "待葡萄管家确认",
   };
   return map[status] ?? status;
+}
+
+export function budgetStatusLabel(status: BudgetStatus | string) {
+  const map: Record<string, string> = {
+    draft: "草稿编写中",
+    pending_confirmation: "待葡萄管家确认",
+    confirmed: "已确认生效",
+    revision_requested: "已申请修正，待解除锁定",
+    revision_unlocked: "已解除锁定，可修改",
+    revision_pending_confirmation: "修正待重新确认",
+  };
+  return map[status] ?? status;
+}
+
+export function budgetStatusBadgeClass(status: BudgetStatus | string) {
+  if (status === "confirmed") return "ok";
+  if (status === "draft" || status === "revision_unlocked") return "warn";
+  return "";
+}
+
+export function budgetHealth(usedPct: number): "ok" | "warn" | "danger" {
+  if (usedPct >= 100) return "danger";
+  if (usedPct >= 80) return "warn";
+  return "ok";
+}
+
+export function formatPercent(value: number) {
+  if (!isFinite(value)) return "0%";
+  return `${value.toFixed(1)}%`;
 }
 
 export function addCycle(date: Date, cycle: Cycle | null, count: number) {

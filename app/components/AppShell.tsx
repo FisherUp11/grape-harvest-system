@@ -20,6 +20,7 @@ const navGroups = [
       { href: "/commitments", label: "承诺支持", icon: "🌱" },
       { href: "/receipts", label: "收葡萄", icon: "🧺" },
       { href: "/consumptions", label: "吃葡萄", icon: "🍽️" },
+      { href: "/budget", label: "吃葡萄预算", icon: "📊" },
       { href: "/supporters", label: "支持者", icon: "🤝" },
     ],
   },
@@ -55,7 +56,7 @@ export default function AppShell({ children, profile }: { children: React.ReactN
           </div>
         </div>
 
-        <nav>
+        <nav className="sidebar-scroll">
           {navGroups.map((group) => (
             <section className="nav-section" key={group.title}>
               <p className="nav-title">{group.title}</p>
@@ -74,9 +75,9 @@ export default function AppShell({ children, profile }: { children: React.ReactN
 
         <div className="sidebar-footer">
           <small>{profile?.organizations?.name || "当前组织"}</small>
-          <div style={{ marginTop: 6, fontWeight: 800 }}>{profileName(profile)}</div>
-          <div className="badge" style={{ marginTop: 10 }}>{roleLabel(profile?.role)}</div>
-          <button className="btn btn-secondary" style={{ width: "100%", marginTop: 14 }} onClick={logout}>退出登录</button>
+          <div className="sidebar-username">{profileName(profile)}</div>
+          <div className="badge role-badge">{roleLabel(profile?.role)}</div>
+          <button className="btn btn-secondary btn-logout" onClick={logout}>退出登录</button>
         </div>
       </aside>
       <main className="content">{children}</main>
