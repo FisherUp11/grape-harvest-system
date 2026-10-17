@@ -1,66 +1,102 @@
-// 客户端图片压缩：在上传前将图片缩放到合理尺寸并转为 JPEG，减少 Supabase Storage 占用。
-// 纯浏览器 Canvas 实现，不引入额外依赖。
+// 凭证优先保留小字：清晰模式 2560px / JPEG 0.88；原图模式供用户核对后选择。
+export const MAX_ATTACHMENT_COUNT = 5;
+export const MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024;
+export const MAX_SOURCE_IMAGE_SIZE = 30 * 1024 * 1024;
+export const ATTACHMENT_ACCEPT =
+  "image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf";
+const ALLOWED_TYPES = ATTACHMENT_ACCEPT.split(",");
+export type PreparedAttachment = {
+  original: File;
+  file: File;
+  width?: number;
+  height?: number;
+  warning?: string;
+};
 
-const MAX_DIMENSION = 1600;
-const JPEG_QUALITY = 0.72;
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+export function validateAttachment(file: File) {
+  if (!ALLOWED_TYPES.includes(file.type))
+    throw new Error(
+      `「${file.name}」格式不支持，请使用 JPEG、PNG、WebP、HEIC 或 PDF。`,
+    );
+  const limit = file.type.startsWith("image/")
+    ? MAX_SOURCE_IMAGE_SIZE
+    : MAX_ATTACHMENT_SIZE;
+  if (file.size > limit)
+    throw new Error(
+      `「${file.name}」过大，图片原文件最多 30 MB，PDF 最多 8 MB。`,
+    );
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("图片加载失败"));
-    img.src = src;
-  });
-}
-
-/**
- * 压缩图片文件。非图片或不受支持的类型（如 SVG）将原样返回。
- * 若压缩后体积没有变小，则返回原文件。
- */
-export async function compressImageFile(file: File): Promise<File> {
-  if (!file.type.startsWith("image/") || file.type === "image/svg+xml") return file;
-
+export async function prepareAttachment(
+  original: File,
+): Promise<PreparedAttachment> {
+  validateAttachment(original);
+  if (!original.type.startsWith("image/")) return { original, file: original };
+  const url = URL.createObjectURL(original);
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const img = await loadImage(dataUrl);
-
-    let { width, height } = img;
-    if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-      if (width >= height) {
-        height = Math.round((height * MAX_DIMENSION) / width);
-        width = MAX_DIMENSION;
-      } else {
-        width = Math.round((width * MAX_DIMENSION) / height);
-        height = MAX_DIMENSION;
-      }
-    }
-
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("浏览器无法解码图片"));
+      image.src = url;
+    });
+    const longReceipt =
+      Math.max(img.width, img.height) / Math.min(img.width, img.height) > 3;
+    const ratio = longReceipt
+      ? Math.min(
+          1,
+          1600 / Math.min(img.width, img.height),
+          8000 / Math.max(img.width, img.height),
+        )
+      : Math.min(1, 2560 / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * ratio));
+    const height = Math.max(1, Math.round(img.height * ratio));
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return file;
+    if (!ctx) throw new Error("无法创建图片预览");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, 0, 0, width, height);
-
-    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
-    if (!blob || blob.size >= file.size) return file;
-
-    const newName = file.name.replace(/\.[^./\\]+$/, "") + ".jpg";
-    return new File([blob], newName, { type: "image/jpeg" });
-  } catch {
-    // 压缩失败时退回原文件，避免阻塞用户提交。
-    return file;
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.88),
+    );
+    if (!blob) throw new Error("图片压缩失败");
+    const compressed = blob.size < original.size;
+    const file = compressed
+      ? new File([blob], original.name.replace(/\.[^./\\]+$/, "") + ".jpg", {
+          type: "image/jpeg",
+          lastModified: original.lastModified,
+        })
+      : original;
+    if (file.size > MAX_ATTACHMENT_SIZE)
+      throw new Error("压缩后仍超过 8 MB，请裁剪或拆分凭证后上传。");
+    return {
+      original,
+      file,
+      width: compressed ? width : img.width,
+      height: compressed ? height : img.height,
+    };
+  } catch (error) {
+    if (original.size > MAX_ATTACHMENT_SIZE)
+      throw new Error(
+        `「${original.name}」无法压缩到 8 MB 以内，请转换为 JPEG 或拆分后重试。`,
+      );
+    return {
+      original,
+      file: original,
+      warning:
+        error instanceof Error
+          ? `${error.message}，将保留原文件。`
+          : "无法压缩，将保留原文件。",
+    };
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
-export const MAX_ATTACHMENT_COUNT = 5;
-export const MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024; // 与 Supabase 存储桶 file_size_limit 保持一致
+export async function compressImageFile(file: File) {
+  return (await prepareAttachment(file)).file;
+}

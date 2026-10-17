@@ -8,11 +8,14 @@ export default function ResetPasswordClient() {
   const router = useRouter();
   const supabase = createClient();
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (password !== confirmPassword)
+      return setMessage("两次输入的密码不一致。");
     setLoading(true);
     const { error } = await supabase.auth.updateUser({ password });
     if (!error) await supabase.auth.signOut();
@@ -32,11 +35,34 @@ export default function ResetPasswordClient() {
         <p className="muted">请输入至少 8 位的新密码。保存后会退出当前会话。</p>
         <form className="stack" onSubmit={save}>
           <div className="field">
-            <label>新密码</label>
-            <input className="input" type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <label htmlFor="new-password">新密码</label>
+            <input
+              id="new-password"
+              autoComplete="new-password"
+              className="input"
+              type="password"
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
           </div>
+          <label className="field">
+            <span>确认新密码</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+            />
+          </label>
           {message && <div className="notice">{message}</div>}
-          <button className="btn btn-primary" disabled={loading}>{loading ? "保存中…" : "保存新密码"}</button>
+          <button className="btn btn-primary" disabled={loading}>
+            {loading ? "保存中…" : "保存新密码"}
+          </button>
         </form>
       </section>
     </main>

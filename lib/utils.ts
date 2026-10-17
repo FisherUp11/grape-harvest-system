@@ -5,20 +5,32 @@ export function formatGrapes(value: number | null | undefined) {
   return `${n.toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} 颗`;
 }
 
-export function toDateInput(date = new Date()) {
+export function toDateInput(date?: Date) {
+  if (!date)
+    return new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Shanghai",
+    }).format(new Date());
   const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return d.toISOString().slice(0, 10);
 }
 
 export function formatDateTime(value: string | null | undefined) {
   if (!value) return "-";
-  return new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
@@ -29,15 +41,21 @@ export function monthRange(year: number, month: number) {
 }
 
 export function currentMonth() {
-  const now = new Date();
-  return { year: now.getFullYear(), month: now.getMonth() + 1 };
+  const [year, month] = toDateInput().split("-").map(Number);
+  return { year, month };
 }
 
 export function roleLabel(role: string | null | undefined) {
-  return role === "grape_keeper" ? "葡萄管家" : "记录者";
+  return role === "super_admin"
+    ? "葡萄总园主"
+    : role === "grape_keeper"
+      ? "农场管家"
+      : "记录者";
 }
 
-export function profileName(profile?: Pick<Profile, "display_name" | "email"> | null) {
+export function profileName(
+  profile?: Pick<Profile, "display_name" | "email"> | null,
+) {
   return profile?.display_name || profile?.email || "未命名用户";
 }
 
@@ -77,7 +95,9 @@ export function consumptionTypeLabel(type: string) {
 
 export function statusLabel(status: string) {
   const map: Record<string, string> = {
-    pending: "待葡萄管家确认",
+    draft: "草稿",
+    returned: "已退回，可修改",
+    pending: "待农场管家确认",
     confirmed: "已确认",
     active: "进行中",
     completed: "已完成",
@@ -96,7 +116,7 @@ export function budgetStatusLabel(status: BudgetStatus | string) {
     pending_confirmation: "待葡萄管家确认",
     confirmed: "已确认生效",
     revision_requested: "已申请修正，待解除锁定",
-    revision_unlocked: "已解除锁定，可修改",
+    revision_unlocked: "已退回，可修改",
     revision_pending_confirmation: "修正待重新确认",
   };
   return map[status] ?? status;
@@ -121,15 +141,47 @@ export function formatPercent(value: number) {
 
 export function addCycle(date: Date, cycle: Cycle | null, count: number) {
   const next = new Date(date);
-  if (!cycle || cycle === "monthly") next.setMonth(next.getMonth() + count);
-  if (cycle === "quarterly") next.setMonth(next.getMonth() + count * 3);
-  if (cycle === "half_yearly") next.setMonth(next.getMonth() + count * 6);
-  if (cycle === "yearly") next.setFullYear(next.getFullYear() + count);
+  const day = next.getDate();
+  next.setDate(1);
+  const months =
+    cycle === "quarterly"
+      ? 3
+      : cycle === "half_yearly"
+        ? 6
+        : cycle === "yearly"
+          ? 12
+          : 1;
+  next.setMonth(next.getMonth() + count * months);
+  const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(day, last));
   return next;
 }
 
+export function errorMessage(error: unknown, fallback = "操作失败，请重试。") {
+  return error && typeof error === "object" && "message" in error
+    ? String(error.message)
+    : fallback;
+}
+
+export function periodStatus(period: {
+  status: string;
+  expected_date: string;
+}) {
+  return period.status === "not_received" &&
+    period.expected_date < toDateInput()
+    ? "overdue"
+    : period.status;
+}
+
 export function downloadCsv(filename: string, rows: string[][]) {
-  const escape = (value: string) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const escape = (value: string) => {
+    const raw = String(value ?? "");
+    // 用户输入以公式字符开头时，避免电子表格执行为公式；负数金额仍按数值导出。
+    const safe = /^[\s]*[=+@\t\r]|^[\s]*-(?!\d+(?:\.\d+)?$)/.test(raw)
+      ? `'${raw}`
+      : raw;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
   const csv = rows.map((row) => row.map(escape).join(",")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -138,4 +190,41 @@ export function downloadCsv(filename: string, rows: string[][]) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export function safeRedirectPath(
+  value: string | null | undefined,
+  fallback = "/dashboard",
+) {
+  if (!value?.startsWith("/")) return fallback;
+  const url = new URL(value, "https://local.invalid");
+  return url.origin === "https://local.invalid"
+    ? url.pathname + url.search + url.hash
+    : fallback;
+}
+
+export function auditActionLabel(action: string) {
+  const [table, operation] = action.split(":");
+  const entity: Record<string, string> = {
+    budget_plans: "预算表",
+    budget_categories: "预算科目",
+    grape_receipts: "收葡萄",
+    grape_consumptions: "吃葡萄",
+    commitments: "承诺",
+    supporters: "支持者",
+    record_corrections: "更正单",
+    organizations: "农场",
+    account: "账号",
+  };
+  const verb: Record<string, string> = {
+    insert: "新增",
+    update: "更新",
+    delete: "删除",
+    archived: "作废",
+    assigned: "分配",
+    bootstrap_super_admin: "初始化总园主",
+  };
+  return entity[table] && verb[operation]
+    ? verb[operation] + entity[table]
+    : action;
 }

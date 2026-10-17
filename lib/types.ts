@@ -1,15 +1,17 @@
-export type Role = "user" | "grape_keeper";
+export type Role = "user" | "grape_keeper" | "super_admin";
 
 export type Profile = {
   id: string;
-  org_id: string;
+  org_id: string | null;
   role: Role;
+  must_change_password?: boolean;
+  onboarding_delivery_status?: "not_required" | "pending" | "sent" | "failed";
   display_name: string | null;
   email: string | null;
   monthly_fixed_consumption: number | null;
   grape_alert_threshold: number | null;
   created_at?: string;
-  organizations?: { name: string } | null;
+  organizations?: { name: string; fixed_requires_approval?: boolean } | null;
 };
 
 export type Supporter = {
@@ -29,9 +31,15 @@ export type Supporter = {
 };
 export type Cycle = "monthly" | "quarterly" | "half_yearly" | "yearly";
 export type CommitmentStatus = "active" | "completed" | "stopped" | "cancelled";
-export type PeriodStatus = "not_received" | "overdue" | "pending_confirmation" | "confirmed" | "stopped" | "cancelled";
-export type ReceiptStatus = "pending" | "confirmed";
-export type ConsumptionStatus = "pending" | "confirmed";
+export type PeriodStatus =
+  | "not_received"
+  | "overdue"
+  | "pending_confirmation"
+  | "confirmed"
+  | "stopped"
+  | "cancelled";
+export type ReceiptStatus = "draft" | "pending" | "returned" | "confirmed";
+export type ConsumptionStatus = ReceiptStatus;
 
 export type Commitment = {
   id: string;
@@ -72,7 +80,15 @@ export type CommitmentPeriod = {
   created_at: string;
 };
 
-export type GrapeReceipt = {
+export type WorkflowFields = {
+  deleted_at?: string | null;
+  return_reason?: string | null;
+  auto_confirmed?: boolean;
+  revision_number?: number;
+  is_correction?: boolean;
+};
+
+export type GrapeReceipt = WorkflowFields & {
   id: string;
   org_id: string;
   owner_id: string;
@@ -91,7 +107,7 @@ export type GrapeReceipt = {
   updated_at: string;
 };
 
-export type GrapeConsumption = {
+export type GrapeConsumption = WorkflowFields & {
   id: string;
   org_id: string;
   owner_id: string;
@@ -105,6 +121,7 @@ export type GrapeConsumption = {
   confirmed_at: string | null;
   created_at: string;
   updated_at: string;
+  attachments_ready?: boolean;
 };
 
 export type ConsumptionAttachment = {
@@ -145,9 +162,11 @@ export type BudgetPlan = {
   created_at: string;
   updated_at: string;
   budget_categories?: BudgetCategory[];
+  return_reason?: string | null;
+  supersedes_id?: string | null;
 };
 
-export type BudgetCategory = {
+export type BudgetCategory = WorkflowFields & {
   id: string;
   org_id: string;
   budget_plan_id: string;
@@ -194,3 +213,42 @@ export type StorageUsageBucket = {
 };
 
 export type Dictionary<T> = Record<string, T>;
+
+export type Farm = {
+  id: string;
+  name: string;
+  fixed_requires_approval: boolean;
+  created_at?: string;
+};
+export type RecordCorrection = WorkflowFields & {
+  id: string;
+  org_id: string;
+  owner_id: string;
+  target_table: "grape_receipts" | "grape_consumptions";
+  target_id: string;
+  previous_amount: number;
+  replacement_amount: number;
+  amount_delta: number;
+  correction_date: string;
+  reason: string;
+  status: ReceiptStatus;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+};
+export type EstateCapacity = {
+  database_bytes: number;
+  audit_bytes: number;
+  audit_count: number;
+  storage_bytes: number;
+  storage_count: number;
+  measured_at: string;
+  farms: {
+    id: string;
+    name: string;
+    user_count: number;
+    keeper_count: number;
+    pending_count: number;
+    storage_bytes: number;
+  }[];
+};

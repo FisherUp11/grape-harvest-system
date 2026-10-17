@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
@@ -29,11 +30,11 @@ export function createClient() {
           }
         },
       },
-    }
+    },
   );
 }
 
-export async function getAppContext() {
+export const getSessionContext = cache(async () => {
   const supabase = createClient();
   const {
     data: { user },
@@ -41,16 +42,27 @@ export async function getAppContext() {
 
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase
+  const { data: profile, error } = await supabase
     .from("profiles")
-    .select("*, organizations(name)")
+    .select("*, organizations(name,fixed_requires_approval)")
     .eq("id", user.id)
     .single<Profile>();
+
+  if (error && error.code !== "PGRST116")
+    throw new Error(`账号资料读取失败：${error.message}`);
 
   return {
     supabase,
     user,
     profile: profile ?? null,
     isKeeper: profile?.role === "grape_keeper",
+    isSuperAdmin: profile?.role === "super_admin",
   };
-}
+});
+
+export const getAppContext = cache(async () => {
+  const context = await getSessionContext();
+  if (context.profile?.must_change_password)
+    redirect("/reset-password?required=1");
+  return context;
+});

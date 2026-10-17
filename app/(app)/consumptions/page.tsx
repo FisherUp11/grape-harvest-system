@@ -1,7 +1,12 @@
 import ConsumptionsClient from "./ConsumptionsClient";
 import { getAppContext } from "@/lib/supabase/server";
-import { fetchAllBudgetCategories, fetchConsumptionAttachments, fetchConsumptions, fetchProfiles } from "@/lib/data";
-import type { BudgetPlan } from "@/lib/types";
+import {
+  fetchBudgetPlans,
+  fetchAllBudgetCategories,
+  fetchConsumptionAttachments,
+  fetchConsumptions,
+  fetchProfiles,
+} from "@/lib/data";
 
 export default async function ConsumptionsPage() {
   const { supabase, profile } = await getAppContext();
@@ -11,16 +16,22 @@ export default async function ConsumptionsPage() {
     fetchConsumptions(supabase, profile),
     fetchAllBudgetCategories(supabase, profile),
   ]);
-  const [{ data: myBudgetPlans }, attachments] = await Promise.all([
-    supabase.from("budget_plans").select("*, budget_categories(*)").eq("owner_id", profile.id).eq("status", "confirmed"),
-    fetchConsumptionAttachments(supabase, profile, consumptions.map((c) => c.id)),
+  const [allPlans, attachments] = await Promise.all([
+    fetchBudgetPlans(supabase, profile),
+    fetchConsumptionAttachments(
+      supabase,
+      profile,
+      consumptions.map((c) => c.id),
+    ),
   ]);
   return (
     <ConsumptionsClient
       profile={profile}
       profiles={profiles}
       consumptions={consumptions}
-      confirmedBudgetPlans={(myBudgetPlans ?? []) as BudgetPlan[]}
+      confirmedBudgetPlans={allPlans.filter(
+        (p) => p.owner_id === profile.id && p.status === "confirmed",
+      )}
       categories={categories}
       attachments={attachments}
     />

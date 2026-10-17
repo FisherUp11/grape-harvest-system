@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useId, useRef } from "react";
 
 type Props = {
   open: boolean;
@@ -29,14 +29,50 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef(onCancel);
+  const loadingRef = useRef(loading);
+  const titleId = useId();
+  cancelRef.current = onCancel;
+  loadingRef.current = loading;
   useEffect(() => {
     if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const bodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusable = () =>
+      Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], textarea:not([disabled])",
+        ) ?? [],
+      );
+    focusable()[0]?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !loading) onCancel();
+      if (e.key === "Escape" && !loadingRef.current) cancelRef.current();
+      if (e.key === "Tab") {
+        const nodes = focusable();
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        if (!first) {
+          e.preventDefault();
+          return;
+        }
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, loading, onCancel]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = bodyOverflow;
+      previous?.focus({ preventScroll: true });
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -45,15 +81,31 @@ export default function ConfirmDialog({
       className="modal-overlay"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="confirm-dialog-title"
+      aria-labelledby={titleId}
       onClick={() => !loading && onCancel()}
     >
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <h3 id="confirm-dialog-title">{title}</h3>
+      <div
+        ref={dialogRef}
+        className="modal-card"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 id={titleId}>{title}</h3>
         {description && <div className="modal-desc">{description}</div>}
-        {errorMessage && <div className="notice" style={{ marginTop: 14 }}>{errorMessage}</div>}
-        <div className="btn-row" style={{ justifyContent: "flex-end", marginTop: 22 }}>
-          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={loading}>
+        {errorMessage && (
+          <div className="notice" style={{ marginTop: 14 }}>
+            {errorMessage}
+          </div>
+        )}
+        <div
+          className="btn-row"
+          style={{ justifyContent: "flex-end", marginTop: 22 }}
+        >
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onCancel}
+            disabled={loading}
+          >
             {cancelLabel}
           </button>
           <button

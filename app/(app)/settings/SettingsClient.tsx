@@ -1,70 +1,222 @@
 "use client";
-
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { STORAGE_QUOTA_BYTES } from "@/lib/storage";
-import type { Profile, StorageUsageBucket } from "@/lib/types";
-import { budgetHealth, formatFileSize, formatGrapes, formatPercent, profileName, roleLabel } from "@/lib/utils";
+import FarmApprovalPolicy from "@/app/components/FarmApprovalPolicy";
+import StorageUsage from "@/app/components/StorageUsage";
+import type { Profile } from "@/lib/types";
+import {
+  errorMessage,
+  formatGrapes,
+  profileName,
+  roleLabel,
+} from "@/lib/utils";
 
-type Props = { profile: Profile; profiles: Profile[]; storageUsage: StorageUsageBucket[] };
-
-export default function SettingsClient({ profile, profiles, storageUsage }: Props) {
-  const supabase = createClient();
-  const router = useRouter();
-  const [fixed, setFixed] = useState(String(profile.monthly_fixed_consumption ?? 0));
-  const [threshold, setThreshold] = useState(String(profile.grape_alert_threshold ?? 0));
+type JobConfig = { dailyJob: boolean; email: boolean; monthlyReports: boolean };
+function ReminderForm({ profile, mine }: { profile: Profile; mine: boolean }) {
+  const [fixed, setFixed] = useState(
+    String(profile.monthly_fixed_consumption ?? 0),
+  );
+  const [threshold, setThreshold] = useState(
+    String(profile.grape_alert_threshold ?? 0),
+  );
   const [message, setMessage] = useState("");
-
-  const totalBytes = useMemo(() => storageUsage.reduce((sum, b) => sum + Number(b.total_bytes), 0), [storageUsage]);
-  const totalObjects = useMemo(() => storageUsage.reduce((sum, b) => sum + Number(b.object_count), 0), [storageUsage]);
-  const storagePct = STORAGE_QUOTA_BYTES > 0 ? (totalBytes / STORAGE_QUOTA_BYTES) * 100 : 0;
-  const storageHealth = budgetHealth(storagePct);
-
-  const saveMine = async (e: React.FormEvent) => {
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const router = useRouter();
+  const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { error } = await supabase.from("profiles").update({ monthly_fixed_consumption: Number(fixed), grape_alert_threshold: Number(threshold) }).eq("id", profile.id);
-    setMessage(error ? error.message : "已保存。");
-    router.refresh();
+    if (saving) return;
+    setMessage("");
+    setError("");
+    if (
+      ![fixed, threshold].every(
+        (v) => v.trim() && Number.isFinite(Number(v)) && Number(v) >= 0,
+      )
+    )
+      return setError("请输入大于或等于 0 的有效数值。");
+    setSaving(true);
+    try {
+      const { error } = await createClient()
+        .from("profiles")
+        .update({
+          monthly_fixed_consumption: Number(fixed),
+          grape_alert_threshold: Number(threshold),
+        })
+        .eq("id", profile.id)
+        .select("id")
+        .single();
+      if (error) throw error;
+      setMessage("已保存提醒参数。");
+      router.refresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   };
-
-  const updateProfile = async (id: string, key: "monthly_fixed_consumption" | "grape_alert_threshold", value: string) => {
-    const { error } = await supabase.from("profiles").update({ [key]: Number(value) }).eq("id", id);
-    if (error) alert(error.message);
-    router.refresh();
-  };
-
+  return (
+    <form className="card stack" onSubmit={save}>
+      <div>
+        <h2>{mine ? "我的提醒设置" : profileName(profile)}</h2>
+        <p className="muted">
+          {profile.email} · {roleLabel(profile.role)}
+        </p>
+      </div>
+      <fieldset className="form-grid" disabled={saving}>
+        <label className="field">
+          <span>每月固定吃葡萄</span>
+          <input
+            className="input"
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            value={fixed}
+            onChange={(e) => setFixed(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>存量提醒阈值</span>
+          <input
+            className="input"
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+          />
+        </label>
+      </fieldset>
+      <div className="btn-row">
+        <button
+          className="btn btn-secondary"
+          type="button"
+          onClick={() => setThreshold(String(Number(fixed) || 0))}
+        >
+          设为 1 个月固定用量
+        </button>
+        <button
+          className="btn btn-secondary"
+          type="button"
+          onClick={() => setThreshold(String((Number(fixed) || 0) * 2))}
+        >
+          设为 2 个月固定用量
+        </button>
+      </div>
+      <p className="muted">
+        存量低于 {formatGrapes(Number(threshold))} 时提醒；阈值为 0
+        表示关闭。每月固定用量用于预警参考，实际支出仍需登记和确认。
+      </p>
+      {message && (
+        <p className="notice success" role="status">
+          {message}
+        </p>
+      )}
+      {error && (
+        <p className="notice danger" role="alert">
+          {error}
+        </p>
+      )}
+      <button className="btn btn-primary" disabled={saving}>
+        {saving ? "保存中…" : "保存设置"}
+      </button>
+    </form>
+  );
+}
+export default function SettingsClient({
+  profile,
+  profiles,
+  jobs,
+}: {
+  profile: Profile;
+  profiles: Profile[];
+  jobs: JobConfig;
+}) {
+  const [search, setSearch] = useState("");
+  const keeper = profile.role === "grape_keeper";
   return (
     <>
-      <header className="page-header"><div className="page-title"><p className="eyebrow">SYSTEM TUNING</p><h1>葡萄设置</h1><p>维护个人固定吃葡萄数、提醒阈值；葡萄管家可为所有用户设置提醒参数。</p></div></header>
+      <header className="page-header">
+        <div className="page-title">
+          <p className="eyebrow">PREFERENCES</p>
+          <h1>葡萄设置</h1>
+          <p>设置固定用量和存量提醒阈值，查看附件空间使用情况。</p>
+        </div>
+      </header>
       <section className="grid grid-2">
-        <form className="card stack" onSubmit={saveMine}>
-          <h2>我的提醒设置</h2>
-          <div className="form-grid"><div className="field"><label>每月固定吃葡萄</label><input className="input" type="number" min="0" step="0.01" value={fixed} onChange={(e) => setFixed(e.target.value)} /></div><div className="field"><label>葡萄存量提醒阈值</label><input className="input" type="number" min="0" step="0.01" value={threshold} onChange={(e) => setThreshold(e.target.value)} /></div></div>
-          {message && <div className="notice">{message}</div>}
-          <button className="btn btn-primary">保存我的设置</button>
-        </form>
-        <div className="card"><h2>当前身份</h2><p><strong>{profileName(profile)}</strong></p><p className="badge">{roleLabel(profile.role)}</p><p className="muted">葡萄管家可确认记录、查看全体支持者联系方式，并配置每位用户提醒阈值。</p></div>
+        <ReminderForm profile={profile} mine />
+        <StorageUsage isKeeper={keeper} />
       </section>
-      {profile.role === "grape_keeper" && <section className="card" style={{ marginTop: 18 }}><h2>用户提醒参数</h2><div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>每月固定吃葡萄</th><th>提醒阈值</th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id}><td>{profileName(p)}<br /><span className="muted">{p.email}</span></td><td><span className="badge">{roleLabel(p.role)}</span></td><td><input className="input" type="number" defaultValue={p.monthly_fixed_consumption ?? 0} onBlur={(e) => updateProfile(p.id, "monthly_fixed_consumption", e.target.value)} /></td><td><input className="input" type="number" defaultValue={p.grape_alert_threshold ?? 0} onBlur={(e) => updateProfile(p.id, "grape_alert_threshold", e.target.value)} /><div className="muted">当前：{formatGrapes(p.grape_alert_threshold ?? 0)}</div></td></tr>)}</tbody></table></div></section>}
-      {profile.role === "grape_keeper" && (
-        <section className="card" style={{ marginTop: 18 }}>
-          <div className="btn-row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <h2 style={{ margin: 0 }}>图床（Storage）用量</h2>
-            <button className="btn btn-secondary" onClick={() => router.refresh()}>刷新用量</button>
-          </div>
-          <div className="progress-row" style={{ marginTop: 14 }}>
-            <div className={`progress ${storageHealth}`}><span style={{ width: `${Math.min(storagePct, 100)}%` }} /></div>
-            <span className={`progress-pct ${storageHealth}`}>{formatPercent(storagePct)}</span>
-          </div>
-          <p className="muted" style={{ marginTop: 10 }}>
-            已用 {formatFileSize(totalBytes)} / {formatFileSize(STORAGE_QUOTA_BYTES)}（共 {totalObjects} 个文件），统计自吃葡萄凭证附件桶，为估算值，最终以 Supabase 控制台 Storage 页面为准。
+      {keeper && profile.org_id && (
+        <FarmApprovalPolicy
+          farmId={profile.org_id}
+          required={profile.organizations?.fixed_requires_approval ?? false}
+        />
+      )}
+      {keeper && (
+        <section className="card section-space">
+          <h2>自动检查与邮件配置状态</h2>
+          <p>
+            每日检查：
+            <strong>
+              {jobs.dailyJob
+                ? "密钥已配置，调度运行情况见部署平台"
+                : "未配置任务密钥"}
+            </strong>
           </p>
-          {storagePct >= 80 && (
-            <div className="notice" style={{ marginTop: 10 }}>
-              图床空间已接近或超出基础版 {formatFileSize(STORAGE_QUOTA_BYTES)} 配额，建议提醒记录者清理无效附件，或考虑升级 Supabase 套餐。
-            </div>
-          )}
+          <p>
+            提醒邮件：
+            <strong>
+              {jobs.email ? "服务配置已填写，待运行核验" : "未配置，不会发送"}
+            </strong>
+          </p>
+          <p>
+            月报邮件：
+            <strong>
+              {jobs.monthlyReports
+                ? "已启用，每月发送上月摘要与报告入口"
+                : "未启用"}
+            </strong>
+          </p>
+          <p className="muted">
+            邮件和定时任务需要部署环境配置。网页内的存量提醒、手动月报与下载可独立使用。
+          </p>
+        </section>
+      )}
+      {keeper && (
+        <section className="section-space">
+          <div className="section-heading">
+            <h2>用户提醒参数</h2>
+            <label className="field">
+              <span>搜索用户</span>
+              <input
+                className="input"
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="姓名或邮箱"
+              />
+            </label>
+          </div>
+          <div className="grid grid-2">
+            {profiles
+              .filter(
+                (p) =>
+                  p.id !== profile.id &&
+                  `${profileName(p)} ${p.email || ""}`
+                    .toLowerCase()
+                    .includes(search.toLowerCase()),
+              )
+              .map((p) => (
+                <ReminderForm
+                  key={`${p.id}-${p.monthly_fixed_consumption}-${p.grape_alert_threshold}`}
+                  profile={p}
+                  mine={false}
+                />
+              ))}
+          </div>
         </section>
       )}
     </>

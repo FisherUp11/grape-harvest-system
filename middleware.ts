@@ -13,9 +13,14 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname === "/api/cron/daily") return NextResponse.next();
+
   if (pathname.startsWith("/auth")) return NextResponse.next();
 
-  if (req.nextUrl.searchParams.has("code") || req.nextUrl.searchParams.has("token_hash")) {
+  if (
+    req.nextUrl.searchParams.has("code") ||
+    req.nextUrl.searchParams.has("token_hash")
+  ) {
     const url = req.nextUrl.clone();
     url.pathname = "/auth/callback";
     return NextResponse.redirect(url);
@@ -37,7 +42,7 @@ export async function middleware(req: NextRequest) {
           res.cookies.set({ name, value: "", ...options, maxAge: 0 });
         },
       },
-    }
+    },
   );
 
   const {
