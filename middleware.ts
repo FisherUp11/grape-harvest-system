@@ -13,7 +13,8 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname === "/api/cron/daily") return NextResponse.next();
+  if (pathname === "/api/cron/daily" || pathname === "/api/auth/password")
+    return NextResponse.next();
 
   if (pathname.startsWith("/auth")) return NextResponse.next();
 
@@ -23,6 +24,11 @@ export async function middleware(req: NextRequest) {
   ) {
     const url = req.nextUrl.clone();
     url.pathname = "/auth/callback";
+    if (
+      pathname === "/reset-password" ||
+      req.nextUrl.searchParams.get("type") === "recovery"
+    )
+      url.searchParams.set("next", "/reset-password");
     return NextResponse.redirect(url);
   }
 
@@ -50,7 +56,12 @@ export async function middleware(req: NextRequest) {
   } = await supabase.auth.getSession();
 
   if (pathname === "/login" || pathname === "/reset-password") {
-    if (session && pathname === "/login") {
+    if (
+      session &&
+      pathname === "/login" &&
+      !req.nextUrl.searchParams.has("recovery") &&
+      req.nextUrl.searchParams.get("password") !== "updated"
+    ) {
       const url = req.nextUrl.clone();
       url.pathname = "/dashboard";
       url.search = "";

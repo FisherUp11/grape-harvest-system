@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import AuthLinkBridge from "./components/AuthLinkBridge";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -20,7 +21,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <AuthLinkBridge />
+        {children}
+      </body>
     </html>
   );
 }

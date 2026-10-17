@@ -11,7 +11,12 @@ export function sessionFor(role = "user") {
     id: role === "super_admin" ? sid : role === "grape_keeper" ? kid : uid,
     aud: "authenticated",
     role: "authenticated",
-    email: "test@example.invalid",
+    email:
+      role === "super_admin"
+        ? "owner@example.invalid"
+        : role === "grape_keeper"
+          ? "keeper@example.invalid"
+          : "lin@example.invalid",
     app_metadata: {},
     user_metadata: {},
     created_at: new Date().toISOString(),
@@ -43,8 +48,18 @@ export function sessionFor(role = "user") {
 let tables;
 let storedBytes;
 let failedStorage = false;
+let passwordUpdates = [];
+let authFailure = "";
+let passwords = new Map();
 function reset() {
   storedBytes = 0;
+  passwordUpdates = [];
+  authFailure = "";
+  passwords = new Map([
+    [uid, "Old-demo-pass-1!"],
+    [kid, "Keeper-demo-pass-1!"],
+    [sid, "Owner-demo-pass-1!"],
+  ]);
   failedStorage = false;
   const common = {
     org_id: org,
@@ -207,11 +222,12 @@ const server = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader(
     "Access-Control-Allow-Methods",
-    "GET,POST,PATCH,DELETE,OPTIONS",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   );
   res.setHeader("Content-Type", "application/json");
   const send = (data, status = 200) => {
     res.statusCode = status;
+    if (status >= 400 && data?.code) data = { ...data, error_code: data.code };
     res.end(JSON.stringify(data));
   };
   if (req.method === "OPTIONS") return send({});
@@ -241,12 +257,56 @@ const server = createServer(async (req, res) => {
     failedStorage = url.searchParams.get("fail") === "true";
     return send({ ok: true });
   }
-  if (url.pathname === "/auth/v1/user")
+  if (url.pathname === "/__password_updates") return send(passwordUpdates);
+  if (url.pathname === "/__auth_failure") {
+    authFailure = url.searchParams.get("code") || "";
+    return send({ ok: true });
+  }
+  if (url.pathname === "/auth/v1/logout" || url.pathname === "/auth/v1/recover")
+    return send({});
+  if (url.pathname === "/auth/v1/user") {
+    if (
+      !req.headers.authorization ||
+      !token ||
+      ![uid, kid, sid].includes(current)
+    )
+      return send({ code: "session_not_found", msg: "Missing session" }, 401);
+    if (req.method === "PUT") {
+      if (authFailure)
+        return send({ code: authFailure, msg: "Password rejected" }, 422);
+      const input = JSON.parse(body.toString());
+      passwords.set(current, input.password);
+      passwordUpdates.push({ id: current });
+    }
     return send(
       sessionFor(superAdmin ? "super_admin" : keeper ? "grape_keeper" : "user")
         .user,
     );
-  if (url.pathname === "/auth/v1/token") return send(sessionFor());
+  }
+  if (url.pathname === "/auth/v1/token") {
+    const input = JSON.parse(body.toString() || "{}");
+    if (url.searchParams.get("grant_type") === "pkce") {
+      if (input.auth_code !== "fixture-valid-code")
+        return send({ code: "otp_expired", msg: "Expired link" }, 400);
+      return send(sessionFor("grape_keeper"));
+    }
+    if (url.searchParams.get("grant_type") === "password") {
+      const p = tables.profiles.find((p) => p.email === input.email);
+      if (!p || passwords.get(p.id) !== input.password)
+        return send(
+          { code: "invalid_credentials", msg: "Invalid credentials" },
+          400,
+        );
+      return send(sessionFor(p.role));
+    }
+    return send(sessionFor());
+  }
+  if (url.pathname === "/auth/v1/verify") {
+    const input = JSON.parse(body.toString() || "{}");
+    if (input.token_hash !== "fixture-valid-hash" || input.type !== "recovery")
+      return send({ code: "otp_expired", msg: "Expired link" }, 403);
+    return send(sessionFor("grape_keeper"));
+  }
   if (url.pathname === "/rest/v1/rpc/get_estate_capacity")
     return superAdmin
       ? send({
