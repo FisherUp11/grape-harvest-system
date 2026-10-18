@@ -82,6 +82,7 @@ test("旧邮件implicit凭证覆盖旧账号，正确账号改密后新密码可
     await (await request.get(mock + "/__password_updates")).json(),
   ).toEqual([{ id: session.user.id }]);
   await page.getByRole("link", { name: "使用这个邮箱重新登录" }).click();
+  await page.waitForLoadState("networkidle");
   await expect(page.getByLabel("邮箱", { exact: true })).toHaveValue(
     "keeper@example.invalid",
   );

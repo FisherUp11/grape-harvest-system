@@ -122,6 +122,8 @@ export type GrapeConsumption = WorkflowFields & {
   created_at: string;
   updated_at: string;
   attachments_ready?: boolean;
+  recurring_plan_id?: string | null;
+  scheduled_for?: string | null;
 };
 
 export type ConsumptionAttachment = {
@@ -134,6 +136,26 @@ export type ConsumptionAttachment = {
   mime_type: string;
   file_size: number;
   created_at: string;
+  is_permanent?: boolean;
+};
+
+export type RecurringConsumptionPlan = {
+  id: string;
+  org_id: string;
+  owner_id: string;
+  description: string;
+  grape_amount: number;
+  start_date: string;
+  end_date: string;
+  day_of_month: number;
+  budget_category_id: string | null;
+  next_date: string | null;
+  status: "active" | "stopped" | "completed";
+  generated_count: number;
+  last_generated_date: string | null;
+  last_error: string | null;
+  stopped_at: string | null;
+  stop_reason: string | null;
 };
 
 export type BudgetStatus =

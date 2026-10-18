@@ -72,6 +72,7 @@ function reset() {
       { id: org, name: "测试庄园", fixed_requires_approval: false },
     ],
     record_corrections: [],
+    recurring_consumption_plans: [],
     grape_receipt_attachments: [],
     profiles: [
       {
@@ -328,7 +329,28 @@ const server = createServer(async (req, res) => {
           ],
         })
       : send({ message: "仅总园主可查看" }, 403);
-  if (url.pathname === "/rest/v1/rpc/record_action") {
+  if (url.pathname === "/rest/v1/rpc/sync_recurring_consumptions")
+    return send({ generated: 0, blocked: 0 });
+  if (url.pathname === "/rest/v1/rpc/stop_recurring_consumption") {
+    const { p_id, p_reason } = JSON.parse(body.toString());
+    const plan = tables.recurring_consumption_plans.find(
+      (p) => p.id === p_id && p.owner_id === current,
+    );
+    if (!plan || !p_reason)
+      return send({ message: "计划不存在或原因缺失" }, 400);
+    Object.assign(plan, {
+      status: "stopped",
+      next_date: null,
+      stop_reason: p_reason,
+    });
+    return send(null);
+  }
+  if (
+    [
+      "/rest/v1/rpc/record_action",
+      "/rest/v1/rpc/record_action_checked",
+    ].includes(url.pathname)
+  ) {
     const { p_table, p_id, p_action, p_reason } = JSON.parse(body.toString());
     const row = tables[p_table]?.find((r) => r.id === p_id);
     if (!row) return send({ message: "记录不存在" }, 404);
@@ -346,6 +368,11 @@ const server = createServer(async (req, res) => {
     if (p_action === "return") {
       row.status = "returned";
       row.return_reason = p_reason;
+    }
+    if (p_action === "recall") {
+      if (row.status !== "pending" || row.owner_id !== current)
+        return send({ message: "无法召回" }, 400);
+      row.status = "draft";
     }
     if (p_action === "archive") row.deleted_at = new Date().toISOString();
     return send(null);
@@ -410,6 +437,27 @@ const server = createServer(async (req, res) => {
       ...r,
     }));
     tables[table].push(...records);
+    if (table === "recurring_consumption_plans")
+      for (const p of records) {
+        const month = new Date(p.start_date + "T00:00:00Z");
+        const due = new Date(
+          Date.UTC(
+            month.getUTCFullYear(),
+            month.getUTCMonth(),
+            Math.min(
+              p.day_of_month,
+              new Date(
+                Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0),
+              ).getUTCDate(),
+            ),
+          ),
+        );
+        Object.assign(p, {
+          status: "active",
+          next_date: due.toISOString().slice(0, 10),
+          generated_count: 0,
+        });
+      }
     rows = records;
   }
   if (req.method === "PATCH") {

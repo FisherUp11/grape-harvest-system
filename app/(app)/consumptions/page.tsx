@@ -6,16 +6,27 @@ import {
   fetchConsumptionAttachments,
   fetchConsumptions,
   fetchProfiles,
+  readRows,
 } from "@/lib/data";
+import type { RecurringConsumptionPlan } from "@/lib/types";
 
 export default async function ConsumptionsPage() {
   const { supabase, profile } = await getAppContext();
   if (!profile) return null;
-  const [profiles, consumptions, categories] = await Promise.all([
-    fetchProfiles(supabase, profile),
-    fetchConsumptions(supabase, profile),
-    fetchAllBudgetCategories(supabase, profile),
-  ]);
+  const [profiles, consumptions, categories, recurringPlans] =
+    await Promise.all([
+      fetchProfiles(supabase, profile),
+      fetchConsumptions(supabase, profile),
+      fetchAllBudgetCategories(supabase, profile),
+      readRows<RecurringConsumptionPlan>(
+        supabase
+          .from("recurring_consumption_plans")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .order("id"),
+        "按月固定计划",
+      ),
+    ]);
   const [allPlans, attachments] = await Promise.all([
     fetchBudgetPlans(supabase, profile),
     fetchConsumptionAttachments(
@@ -34,6 +45,7 @@ export default async function ConsumptionsPage() {
       )}
       categories={categories}
       attachments={attachments}
+      recurringPlans={recurringPlans}
     />
   );
 }

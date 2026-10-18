@@ -36,11 +36,12 @@ import RecordTable from "./RecordTable";
 import RecordFilters, { EMPTY_FILTERS } from "./RecordFilters";
 import AttachmentPicker from "./AttachmentPicker";
 import StorageUsage from "./StorageUsage";
+import FixedVoucherUpload from "./FixedVoucherUpload";
 
 type Row = GrapeReceipt | GrapeConsumption;
 type Action =
   | { kind: "save"; submit: boolean }
-  | { kind: "confirm" | "return" | "archive"; row: Row };
+  | { kind: "confirm" | "return" | "archive" | "recall"; row: Row };
 export default function LedgerClient({
   kind,
   profile,
@@ -49,6 +50,7 @@ export default function LedgerClient({
   supporters = [],
   plans = [],
   attachments = [],
+  beforeForm,
 }: {
   kind: "receipt" | "consumption";
   profile: Profile;
@@ -57,6 +59,7 @@ export default function LedgerClient({
   supporters?: Supporter[];
   plans?: BudgetPlan[];
   attachments?: ConsumptionAttachment[];
+  beforeForm?: React.ReactNode;
 }) {
   const receipt = kind === "receipt";
   const table = receipt ? "grape_receipts" : "grape_consumptions";
@@ -171,7 +174,12 @@ export default function LedgerClient({
     if (!receipt && !notes.trim()) return setError("请填写用途说明。");
     if (!receipt && activePlan && !category)
       return setError("请选择该日期生效预算的科目。");
-    if (submit && !receipt && files.length + existing.length === 0)
+    if (
+      submit &&
+      !receipt &&
+      consumptionType !== "fixed" &&
+      files.length + existing.length === 0
+    )
       return setError("提交前请上传至少一个凭证。");
     if (
       files.some(
@@ -256,7 +264,7 @@ export default function LedgerClient({
         }
         const ready = await supabase
           .from(table)
-          .update({ attachments_ready: true })
+          .update({ attachments_ready: files.length + existing.length > 0 })
           .eq("id", id)
           .select("id")
           .single();
@@ -279,7 +287,7 @@ export default function LedgerClient({
       reset();
       setAction(null);
     } catch (err) {
-      if (!submissionAttempted) {
+      if (!submissionAttempted && (receipt || consumptionType !== "fixed")) {
         for (const id of metadata)
           await supabase
             .from("grape_consumption_attachments")
@@ -290,6 +298,14 @@ export default function LedgerClient({
             await removeConsumptionAttachment(supabase, path);
           } catch {
             /* 用量卡保留未清理文件真实占用 */
+          }
+        }
+      } else if (!submissionAttempted) {
+        for (const path of uploaded.slice(metadata.length)) {
+          try {
+            await removeConsumptionAttachment(supabase, path);
+          } catch {
+            /* 已成功登记的永久凭证由 RLS 保护 */
           }
         }
       }
@@ -313,17 +329,22 @@ export default function LedgerClient({
       else {
         if (["return", "archive"].includes(action.kind) && !reason.trim())
           throw new Error("请填写原因。");
-        const result = await supabase.rpc("record_action", {
+        const result = await supabase.rpc("record_action_checked", {
           p_table: table,
           p_id: action.row.id,
           p_action: action.kind,
+          p_revision: action.row.revision_number || 1,
           p_reason: reason.trim() || null,
         });
         if (result.error) throw result.error;
-        if (action.kind === "archive" && !receipt) {
+        if (
+          action.kind === "archive" &&
+          !receipt &&
+          (action.row as GrapeConsumption).consumption_type !== "fixed"
+        ) {
           let failed = false;
           for (const a of attachments.filter(
-            (a) => a.consumption_id === action.row.id,
+            (a) => a.consumption_id === action.row.id && !a.is_permanent,
           )) {
             try {
               await removeConsumptionAttachment(supabase, a.file_path);
@@ -338,9 +359,13 @@ export default function LedgerClient({
           );
         } else
           setSuccess(
-            action.kind === "return"
-              ? "已退回，记录者现在可以修改后重新提交。"
-              : "操作已完成。",
+            action.kind === "recall"
+              ? "已召回，可修改后重新提交；召回及变更记录已保留。"
+              : action.kind === "archive" && !receipt
+                ? "记录已作废；固定吃葡萄凭证与审计永久保留。"
+                : action.kind === "return"
+                  ? "已退回，记录者现在可以修改后重新提交。"
+                  : "操作已完成。",
           );
         setAction(null);
         setReason("");
@@ -375,13 +400,14 @@ export default function LedgerClient({
           <p>
             {superAdmin
               ? "总园主可查看所有农场的记录，业务数据只读。"
-              : "草稿可修改 → 提交即锁定 → 管家退回后才能修改；确认后永久保留原记录。"}
+              : "草稿可修改 → 待确认可本人召回修改 → 确认后永久锁定；召回与变更均保留审计。"}
           </p>
         </div>
         <button className="btn btn-secondary" onClick={exportCsv}>
           导出筛选结果 CSV
         </button>
       </header>
+      {beforeForm}
       {success && (
         <p className="notice success" role="status">
           {success}
@@ -567,7 +593,7 @@ export default function LedgerClient({
                   <p className="notice">
                     {consumptionType === "fixed" &&
                     profile.organizations?.fixed_requires_approval === false
-                      ? "本农场固定吃葡萄免确认：提交后立即生效并锁定，请核对金额与凭证。"
+                      ? "本农场固定吃葡萄免确认：提交后立即生效并锁定，请核对数量。凭证允许后补，上传后不可删除。"
                       : "这笔吃葡萄须经农场管家确认。项目与一次性吃葡萄始终需要确认。"}
                   </p>
                 </>
@@ -594,10 +620,10 @@ export default function LedgerClient({
               <div className="card">
                 <h2>记录与审核</h2>
                 <p>
-                  已提交记录不能自行修改或删除。管家填写原因退回后，本人才可修改并重新提交。
+                  待确认记录可由本人召回，或由管家填写原因退回后修改。确认后不可召回。
                 </p>
                 <p>
-                  已确认记录与凭证锁定；如发现错误，请提交更正单。作废文字资料会保留审计。
+                  已确认原单锁定；错误通过更正单处理。固定吃葡萄可后补凭证，上传后永久留存。
                 </p>
               </div>
             </div>
@@ -641,6 +667,17 @@ export default function LedgerClient({
                 {r.auto_confirmed ? "系统自动生效" : statusLabel(r.status)}
               </span>,
               <div key="f">
+                {!receipt &&
+                  (r as GrapeConsumption).consumption_type === "fixed" && (
+                    <p className="muted">
+                      {attachments.some((a) => a.consumption_id === r.id)
+                        ? "凭证已留存 · 不可删除"
+                        : "待补凭证"}
+                      {(r as GrapeConsumption).recurring_plan_id
+                        ? " · 按月计划生成"
+                        : ""}
+                    </p>
+                  )}
                 {!receipt && (
                   <AttachmentLinks
                     items={attachments.filter((a) => a.consumption_id === r.id)}
@@ -653,6 +690,32 @@ export default function LedgerClient({
                 </small>
               </div>,
               <div key="ops" className="btn-row">
+                {r.owner_id === profile.id &&
+                  !superAdmin &&
+                  r.status === "pending" && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setAction({ kind: "recall", row: r });
+                        setError("");
+                      }}
+                    >
+                      召回修改
+                    </button>
+                  )}
+                {!receipt &&
+                  !superAdmin &&
+                  r.owner_id === profile.id &&
+                  (r as GrapeConsumption).consumption_type === "fixed" && (
+                    <FixedVoucherUpload
+                      profile={profile}
+                      row={r as GrapeConsumption}
+                      existingCount={
+                        attachments.filter((a) => a.consumption_id === r.id)
+                          .length
+                      }
+                    />
+                  )}
                 {editable(r) && (
                   <>
                     <button
@@ -708,7 +771,7 @@ export default function LedgerClient({
                   )}
                 {superAdmin && <span className="muted">只读</span>}
                 {r.status === "pending" && !keeper && (
-                  <span className="muted">提交已锁定</span>
+                  <span className="muted">待管家确认 · 召回后可修改</span>
                 )}
               </div>,
             ],
@@ -722,11 +785,13 @@ export default function LedgerClient({
             ? action.submit
               ? "核对后提交？"
               : "保存草稿？"
-            : action?.kind === "return"
-              ? "退回这条记录？"
-              : action?.kind === "archive"
-                ? "作废并保留审计？"
-                : "确认生效并锁定记录？"
+            : action?.kind === "recall"
+              ? "召回这条待确认记录？"
+              : action?.kind === "return"
+                ? "退回这条记录？"
+                : action?.kind === "archive"
+                  ? "作废并保留审计？"
+                  : "确认生效并锁定记录？"
         }
         loading={busy}
         loadingLabel={progress || "处理中…"}
@@ -737,10 +802,12 @@ export default function LedgerClient({
           <div className="stack">
             <p>
               {action?.kind === "save"
-                ? `${date} · ${formatGrapes(Number(amount))}。${action.submit ? "提交后不可自行修改，免确认固定支出会立即生效。" : "草稿不会影响葡萄存量。"}`
-                : action && "row" in action
-                  ? `${profileName(people[action.row.owner_id])} · ${formatGrapes(action.row.grape_amount)}。确认后任何业务角色都不能修改原单。`
-                  : ""}
+                ? `${date} · ${formatGrapes(Number(amount))}。${action.submit ? "待确认期间可召回；免确认固定支出会立即生效并锁定。" : "草稿不会影响葡萄存量。"}`
+                : action?.kind === "recall"
+                  ? "召回成功后恢复草稿，修改后需要重新提交。若管家已经确认，本次召回会被拒绝；原操作及变更均保留审计。"
+                  : action && "row" in action
+                    ? `${profileName(people[action.row.owner_id])} · ${formatGrapes(action.row.grape_amount)}。确认后任何业务角色都不能修改原单。`
+                    : ""}
             </p>
             {(action?.kind === "return" || action?.kind === "archive") && (
               <label className="field">

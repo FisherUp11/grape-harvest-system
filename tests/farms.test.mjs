@@ -46,6 +46,8 @@ test("三角色、多农场、审核状态机与容量（完整升级）", async
     "20261017134546_farm_workflows.sql",
     "20261017150658_farm_security_review.sql",
     "20261017151557_budget_version_usage.sql",
+    "20261018061514_recurring_fixed_and_recall.sql",
+    "20261018063700_review_record_revision.sql",
   ])
     await db.exec(
       await readFile(
@@ -344,7 +346,7 @@ test("三角色、多农场、审核状态机与容量（完整升级）", async
     );
   });
   await t.test(
-    "预算提交不可自行撤回，退回后可修改，确认版本不可解锁但可复制新版",
+    "预算待确认可自行召回，确认版本不可解锁但可复制新版",
     async () => {
       await as(user);
       budget = await v(
@@ -359,10 +361,12 @@ test("三角色、多农场、审核状态机与容量（完整升级）", async
         `update budget_plans set status='pending_confirmation' where id=$1`,
         [budget],
       );
-      await assert.rejects(
-        db.query(`update budget_plans set status='draft' where id=$1`, [
-          budget,
-        ]),
+      await db.query(`update budget_plans set status='draft' where id=$1`, [
+        budget,
+      ]);
+      await db.query(
+        `update budget_plans set status='pending_confirmation' where id=$1`,
+        [budget],
       );
       await as(keeper);
       await db.query(
@@ -585,4 +589,343 @@ test("三角色、多农场、审核状态机与容量（完整升级）", async
       "25.00",
     );
   });
+  await t.test("待确认仅本人可召回；召回与确认互斥，审计保留变更", async () => {
+    await as(user);
+    const id = await v(
+      "insert into grape_receipts(org_id,owner_id,received_date,grape_amount) values($1,$2,current_date,77) returning id",
+      [farm, user],
+    );
+    await act("grape_receipts", id, "submit");
+    await as(keeper);
+    await assert.rejects(act("grape_receipts", id, "recall"));
+    await as(user);
+    await act("grape_receipts", id, "recall");
+    assert.equal(
+      await v("select status from grape_receipts where id=$1", [id]),
+      "draft",
+    );
+    await as(keeper);
+    await assert.rejects(act("grape_receipts", id, "confirm"));
+    await as(user);
+    await db.query("update grape_receipts set grape_amount=78 where id=$1", [
+      id,
+    ]);
+    await act("grape_receipts", id, "submit");
+    await as(keeper);
+    await assert.rejects(
+      db.query(
+        "select record_action_checked('grape_receipts',$1,'confirm',1)",
+        [id],
+      ),
+    );
+    await act("grape_receipts", id, "confirm");
+    await as(user);
+    await assert.rejects(act("grape_receipts", id, "recall"));
+    assert.ok(
+      Number(
+        await v(
+          "select count(*) from audit_logs where entity_id=$1 and action='grape_receipts:recalled' and old_data->>'status'='pending' and new_data->>'status'='draft'",
+          [id],
+        ),
+      ) > 0,
+    );
+  });
+  await t.test(
+    "固定吃葡萄可无凭证生效，确认后可补传，凭证及存储对象不能删除或覆盖",
+    async () => {
+      await as(user);
+      const id = await v(
+        "insert into grape_consumptions(org_id,owner_id,consumption_date,grape_amount,consumption_type,description) values($1,$2,current_date,31,'fixed','后补凭证') returning id",
+        [farm, user],
+      );
+      await act("grape_consumptions", id, "submit");
+      assert.equal(
+        await v("select status from grape_consumptions where id=$1", [id]),
+        "confirmed",
+      );
+      const path = `${user}/${id}/permanent.jpg`;
+      await db.query(
+        "insert into storage.objects(bucket_id,name) values('consumption-attachments',$1)",
+        [path],
+      );
+      const aid = await v(
+        "insert into grape_consumption_attachments(org_id,owner_id,consumption_id,file_path,file_name,mime_type,file_size) values($1,$2,$3,$4,'permanent.jpg','image/jpeg',1024) returning id",
+        [farm, user, id, path],
+      );
+      assert.equal(
+        await v(
+          "select is_permanent from grape_consumption_attachments where id=$1",
+          [aid],
+        ),
+        true,
+      );
+      assert.equal(
+        (
+          await q(
+            "delete from grape_consumption_attachments where id=$1 returning id",
+            [aid],
+          )
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          await q("delete from storage.objects where name=$1 returning id", [
+            path,
+          ])
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          await q(
+            "update grape_consumption_attachments set file_name='changed' where id=$1 returning id",
+            [aid],
+          )
+        ).length,
+        0,
+      );
+      const raw = await v(
+        "insert into grape_consumptions(org_id,owner_id,consumption_date,grape_amount,consumption_type,description) values($1,$2,current_date,3,'fixed','草稿凭证不可移除') returning id",
+        [farm, user],
+      );
+      const rawpath = `${user}/${raw}/permanent.jpg`;
+      const rawaid = await v(
+        "insert into grape_consumption_attachments(org_id,owner_id,consumption_id,file_path,file_name,mime_type,file_size) values($1,$2,$3,$4,'permanent.jpg','image/jpeg',1024) returning id",
+        [farm, user, raw, rawpath],
+      );
+      await db.query(
+        "update grape_consumptions set consumption_type='project' where id=$1",
+        [raw],
+      );
+      assert.equal(
+        (
+          await q(
+            "delete from grape_consumption_attachments where id=$1 returning id",
+            [rawaid],
+          )
+        ).length,
+        0,
+      );
+      const future = await v(
+        "insert into grape_consumptions(org_id,owner_id,consumption_date,grape_amount,consumption_type,description) values($1,$2,current_date+1,2,'fixed','未来不生效') returning id",
+        [farm, user],
+      );
+      await assert.rejects(act("grape_consumptions", future, "submit"));
+    },
+  );
+  await t.test(
+    "月末计算、仅到期生成、幂等与来源防伪；终止不能恢复且跨农场隔离",
+    async () => {
+      await as(other);
+      assert.equal(
+        await v("select private.fixed_month_date('2028-02-01',31)::text"),
+        "2028-02-29",
+      );
+      assert.equal(
+        await v("select private.fixed_month_date('2027-02-01',31)::text"),
+        "2027-02-28",
+      );
+      const id = await v(
+        "insert into recurring_consumption_plans(org_id,owner_id,description,grape_amount,start_date,end_date,day_of_month) values($1,$2,'每月固定',3000,current_date,(current_date+interval '3 months')::date,extract(day from current_date)) returning id",
+        [farm2, other],
+      );
+      const run = await v("select sync_recurring_consumptions()");
+      assert.equal(run.generated, 1);
+      assert.equal(run.blocked, 0);
+      assert.equal(
+        await v(
+          "select count(*) from grape_consumptions where recurring_plan_id=$1",
+          [id],
+        ),
+        1,
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).generated,
+        0,
+      );
+      await assert.rejects(
+        db.query(
+          "insert into grape_consumptions(org_id,owner_id,consumption_date,grape_amount,consumption_type,description,recurring_plan_id,scheduled_for) select org_id,owner_id,next_date,grape_amount,'fixed',description,id,next_date from recurring_consumption_plans where id=$1",
+          [id],
+        ),
+      );
+      await as(user);
+      assert.equal(
+        (await q("select * from recurring_consumption_plans where id=$1", [id]))
+          .length,
+        0,
+      );
+      await as(owner);
+      await assert.rejects(db.query("select sync_recurring_consumptions()"));
+      await as(otherKeeper);
+      await assert.rejects(
+        db.query("select stop_recurring_consumption($1,'无权停止')", [id]),
+      );
+      await as(other);
+      await assert.rejects(
+        db.query("select stop_recurring_consumption($1,'')", [id]),
+      );
+      await db.query("select stop_recurring_consumption($1,'意外情况')", [id]);
+      await assert.rejects(
+        db.query(
+          "update recurring_consumption_plans set status='active' where id=$1",
+          [id],
+        ),
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).generated,
+        0,
+      );
+      assert.equal(
+        await v(
+          "select count(*) from grape_consumptions where recurring_plan_id=$1",
+          [id],
+        ),
+        1,
+      );
+    },
+  );
+  await t.test(
+    "开启审核时每期需管家确认，但可不带凭证；缺预算不会跳过，补正后可重试",
+    async () => {
+      await as(otherKeeper);
+      await db.query(
+        "update organizations set fixed_requires_approval=true where id=$1",
+        [farm2],
+      );
+      await as(other);
+      const p = await v(
+        "insert into recurring_consumption_plans(org_id,owner_id,description,grape_amount,start_date,end_date,day_of_month) values($1,$2,'需要确认',45,current_date,current_date,extract(day from current_date)) returning id",
+        [farm2, other],
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).generated,
+        1,
+      );
+      const c = await v(
+        "select id from grape_consumptions where recurring_plan_id=$1",
+        [p],
+      );
+      assert.equal(
+        await v("select status from grape_consumptions where id=$1", [c]),
+        "pending",
+      );
+      await act("grape_consumptions", c, "recall");
+      await act("grape_consumptions", c, "submit");
+      await as(otherKeeper);
+      await act("grape_consumptions", c, "confirm");
+      await as(other);
+      const b = await v(
+        "insert into budget_plans(org_id,owner_id,title,period_start,period_end) values($1,$2,'固定预算',current_date,(current_date+interval '2 months')::date) returning id",
+        [farm2, other],
+      );
+      const bc = await v(
+        "insert into budget_categories(org_id,owner_id,budget_plan_id,name,budgeted_amount) values($1,$2,$3,'固定事项',9999) returning id",
+        [farm2, other, b],
+      );
+      await db.query(
+        "update budget_plans set status='pending_confirmation' where id=$1",
+        [b],
+      );
+      await as(otherKeeper);
+      await db.query("update budget_plans set status='confirmed' where id=$1", [
+        b,
+      ]);
+      await as(other);
+      const blocked = await v(
+        "insert into recurring_consumption_plans(org_id,owner_id,description,grape_amount,start_date,end_date,day_of_month) values($1,$2,'缺科目',46,current_date,current_date,extract(day from current_date)) returning id",
+        [farm2, other],
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).blocked,
+        1,
+      );
+      assert.equal(
+        await v(
+          "select count(*) from grape_consumptions where recurring_plan_id=$1",
+          [blocked],
+        ),
+        0,
+      );
+      assert.ok(
+        await v(
+          "select last_error from recurring_consumption_plans where id=$1",
+          [blocked],
+        ),
+      );
+      await db.query(
+        "update recurring_consumption_plans set budget_category_id=$2 where id=$1",
+        [blocked, bc],
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).generated,
+        1,
+      );
+      assert.equal(
+        await v(
+          "select budget_category_id from grape_consumptions where recurring_plan_id=$1",
+          [blocked],
+        ),
+        bc,
+      );
+      assert.equal(
+        await v("select status from recurring_consumption_plans where id=$1", [
+          blocked,
+        ]),
+        "completed",
+      );
+      await db.exec(
+        "reset role;set role service_role;set request.jwt.claim.sub='';",
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).blocked,
+        0,
+      );
+    },
+  );
+  await t.test(
+    "任务中断后补处理到期期次，未来不生成，数据库后台身份可运行且重试不重复",
+    async () => {
+      await as(other);
+      const category = await v(
+        "select id from budget_categories where owner_id=$1 limit 1",
+        [other],
+      );
+      const id = await v(
+        "insert into recurring_consumption_plans(org_id,owner_id,description,grape_amount,start_date,end_date,day_of_month,budget_category_id) values($1,$2,'中断恢复测试',17,current_date,current_date,extract(day from current_date),$3) returning id",
+        [farm2, other, category],
+      );
+      // 模拟三个月未执行的后台状态；客户端无权把计划改成过去日期。
+      await db.exec("reset role");
+      await db.query(
+        "update recurring_consumption_plans set start_date=(current_date-interval '3 months')::date,next_date=private.fixed_month_date((current_date-interval '3 months')::date,extract(day from current_date)::integer) where id=$1",
+        [id],
+      );
+      await db.exec("set request.jwt.claim.sub=''");
+      const result = await v("select sync_recurring_consumptions()");
+      assert.equal(result.generated, 4);
+      assert.equal(result.blocked, 0);
+      assert.equal(
+        await v(
+          "select count(*) from grape_consumptions where recurring_plan_id=$1 and consumption_date>current_date",
+          [id],
+        ),
+        0,
+      );
+      assert.equal(
+        await v(
+          "select count(*) from grape_consumptions where recurring_plan_id=$1",
+          [id],
+        ),
+        4,
+      );
+      assert.equal(
+        (await v("select sync_recurring_consumptions()")).generated,
+        0,
+      );
+      await db.exec("set role anon");
+      await assert.rejects(db.query("select sync_recurring_consumptions()"));
+    },
+  );
 });

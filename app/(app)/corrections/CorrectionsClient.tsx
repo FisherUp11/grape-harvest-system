@@ -43,7 +43,7 @@ export default function CorrectionsClient({
     [reason, setReason] = useState(""),
     [date, setDate] = useState(toDateInput());
   const [action, setAction] = useState<{
-      kind: "create" | "confirm" | "return" | "archive";
+      kind: "create" | "confirm" | "return" | "archive" | "recall";
       row?: RecordCorrection;
     } | null>(null),
     [reviewReason, setReviewReason] = useState("");
@@ -111,10 +111,11 @@ export default function CorrectionsClient({
       } else {
         if (["return", "archive"].includes(action.kind) && !reviewReason.trim())
           throw new Error("请填写原因。");
-        const result = await db.rpc("record_action", {
+        const result = await db.rpc("record_action_checked", {
           p_table: "record_corrections",
           p_id: action.row!.id,
           p_action: action.kind,
+          p_revision: action.row!.revision_number || 1,
           p_reason: reviewReason.trim(),
         });
         if (result.error) throw result.error;
@@ -266,6 +267,19 @@ export default function CorrectionsClient({
               </div>,
               statusLabel(r.status),
               <div key="a" className="btn-row">
+                {r.status === "pending" &&
+                  r.owner_id === profile.id &&
+                  profile.role !== "super_admin" && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setAction({ kind: "recall", row: r });
+                        setError("");
+                      }}
+                    >
+                      召回修改
+                    </button>
+                  )}
                 {r.status === "pending" && profile.role === "grape_keeper" && (
                   <>
                     <button
@@ -329,11 +343,13 @@ export default function CorrectionsClient({
         title={
           action?.kind === "create"
             ? "提交更正单？"
-            : action?.kind === "return"
-              ? "退回更正单？"
-              : action?.kind === "archive"
-                ? "作废并保留审计？"
-                : "确认更正差额生效？"
+            : action?.kind === "recall"
+              ? "召回待确认更正单？"
+              : action?.kind === "return"
+                ? "退回更正单？"
+                : action?.kind === "archive"
+                  ? "作废并保留审计？"
+                  : "确认更正差额生效？"
         }
         loading={busy}
         errorMessage={error}
@@ -344,7 +360,9 @@ export default function CorrectionsClient({
             <p>
               {action?.kind === "create"
                 ? `目标金额 ${formatGrapes(Number(amount))}。原单不改变，审核后按差额调整余额。`
-                : `差额 ${formatGrapes(action?.row?.amount_delta)}。确认后更正单也永久锁定。`}
+                : action?.kind === "recall"
+                  ? "仅本人待确认更正单可以召回，修改后须重新提交；如果管家已经确认则无法召回。"
+                  : `差额 ${formatGrapes(action?.row?.amount_delta)}。确认后更正单也永久锁定。`}
             </p>
             {["return", "archive"].includes(action?.kind || "") && (
               <label className="field">

@@ -31,6 +31,7 @@ export async function GET(request: Request) {
           "budget_categories",
           "grape_consumption_attachments",
           "record_corrections",
+          "recurring_consumption_plans",
           "audit_logs",
         ];
     const entries = await Promise.all(

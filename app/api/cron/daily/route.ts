@@ -44,6 +44,10 @@ export async function GET(request: Request) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   try {
+    const { data: recurring, error: recurringError } = await supabase.rpc(
+      "sync_recurring_consumptions",
+    );
+    if (recurringError) throw recurringError;
     const profiles = await readRows<Profile>(
       supabase.from("profiles").select("*").order("id"),
       "任务用户",
@@ -71,6 +75,7 @@ export async function GET(request: Request) {
         lowBalanceUsers: low.length,
         email: "not_configured",
         sent: 0,
+        recurring,
       });
     const base = new URL(process.env.NEXT_PUBLIC_SITE_URL!);
     if (!["https:", "http:"].includes(base.protocol))
@@ -222,6 +227,7 @@ export async function GET(request: Request) {
         sent,
         skipped,
         failed,
+        recurring,
       },
       { status: failed ? 502 : 200 },
     );

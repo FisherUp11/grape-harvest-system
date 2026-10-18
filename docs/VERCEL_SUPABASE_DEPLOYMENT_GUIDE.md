@@ -4,7 +4,7 @@
 
 ## 数据库升级
 
-已有项目不要重跑 schema。新项目先在 Supabase SQL Editor 执行 `supabase/schema.sql`，再按文件名顺序执行 `supabase/migrations/20261017*.sql`。枚举扩展 `farm_roles` 必须单独执行并提交，然后执行 `farm_workflows`。旧 0002/0003 不应在全新 schema 上重复执行。
+已有项目不要重跑 schema。新项目先在 Supabase SQL Editor 执行 `supabase/schema.sql`，再按文件名顺序执行 `supabase/migrations/20261017*.sql`，然后执行 `20261018061514_recurring_fixed_and_recall.sql` 、`20261018062422_schedule_fixed_consumptions.sql` 和 `20261018063700_review_record_revision.sql`。枚举扩展 `farm_roles` 必须单独执行并提交，然后执行 `farm_workflows`。旧 0002/0003 不应在全新 schema 上重复执行。
 
 初始总园主邮箱为 `xiangyufei11@gmail.com`，迁移只提升 Auth 中已验证邮箱的账号；不创建密码、不重置现有密码。新环境须先在 Auth 创建并验证这个邮箱，再执行农场工作流迁移。其他初始化邮箱须在受控 SQL 中明确指定，不能通过注册 metadata 赋予总园主。
 
@@ -42,3 +42,9 @@
 API 返回 503 表示配置尚未完成；502 表示账号已保留但邮件未确认送达，在列表重发。总园主不能确认业务属于预期权限；农场无管家时先分配，不以总园主代审。
 
 完整设计见 [应用架构说明](APP_ARCHITECTURE.md)。
+
+## 按月固定吃葡萄与召回
+
+吃葡萄页可设置按月计划，计划本身不提前扣除。Supabase Cron 已安装并使用 `grape-fixed-consumptions-daily` 每天北京时间 00:05 处理到期记录；无需 Resend 配置。任务执行历史在 Supabase Integrations → Cron 中查看。后台暂停/故障恢复后会补到期期次；有预算阻塞的计划在页面显示原因。
+
+固定吃葡萄凭证允许后补，成功上传后永久保留；项目与一次性仍需凭证再提交。待确认收支、更正单和预算支持本人召回；已确认不能召回。上线后应检查 cron.job 的 active 状态，并验证 `select public.sync_recurring_consumptions()` 返回到期处理统计。生产不要为了验证创建真实支出，测试数据使用本地隔离测试。

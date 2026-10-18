@@ -28,7 +28,7 @@ import RecordTable from "@/app/components/RecordTable";
 type Action =
   | { kind: "create" }
   | {
-      kind: "submit" | "confirm" | "return" | "clone" | "archive";
+      kind: "submit" | "confirm" | "return" | "clone" | "archive" | "recall";
       plan: BudgetPlan;
     }
   | {
@@ -167,25 +167,37 @@ export default function BudgetClient({
         if (["return", "archive"].includes(kind) && !reason.trim())
           throw new Error("请填写原因。");
         const payload =
-          kind === "submit"
+          kind === "recall"
             ? {
                 status:
-                  plan.status === "draft"
-                    ? "pending_confirmation"
-                    : "revision_pending_confirmation",
+                  plan.status === "pending_confirmation"
+                    ? "draft"
+                    : "revision_unlocked",
               }
-            : kind === "confirm"
-              ? { status: "confirmed" }
-              : kind === "return"
-                ? { status: "revision_unlocked", return_reason: reason.trim() }
-                : {
-                    deleted_at: new Date().toISOString(),
-                    deletion_reason: reason.trim(),
-                  };
+            : kind === "submit"
+              ? {
+                  status:
+                    plan.status === "draft"
+                      ? "pending_confirmation"
+                      : "revision_pending_confirmation",
+                }
+              : kind === "confirm"
+                ? { status: "confirmed" }
+                : kind === "return"
+                  ? {
+                      status: "revision_unlocked",
+                      return_reason: reason.trim(),
+                    }
+                  : {
+                      deleted_at: new Date().toISOString(),
+                      deletion_reason: reason.trim(),
+                    };
         const r = await db
           .from("budget_plans")
           .update(payload)
           .eq("id", plan.id)
+          .eq("status", plan.status)
+          .eq("updated_at", plan.updated_at)
           .eq("status", plan.status)
           .select("id")
           .single();
@@ -208,7 +220,7 @@ export default function BudgetClient({
           <p className="eyebrow">BUDGET LEDGER</p>
           <h1>吃葡萄预算</h1>
           <p>
-            提交后不可自行修改；管家退回后才能修订。确认后的原版本永久锁定，后续调整创建新版本。
+            待确认时可本人召回修改，或等待管家退回。确认后的原版本永久锁定，后续调整创建新版本。
           </p>
         </div>
         {!superAdmin && (
@@ -406,6 +418,14 @@ export default function BudgetClient({
                     </button>
                   </>
                 )}
+                {pending && plan.owner_id === profile.id && !superAdmin && (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => ask({ kind: "recall", plan })}
+                  >
+                    召回修改
+                  </button>
+                )}
                 {pending && keeper && (
                   <>
                     <button
@@ -456,11 +476,13 @@ export default function BudgetClient({
         title={
           action?.kind === "confirm"
             ? "确认预算生效并锁定原版本？"
-            : action?.kind === "return"
-              ? "退回预算修改？"
-              : action?.kind === "clone"
-                ? "保留原版并创建新版草稿？"
-                : "确认预算操作？"
+            : action?.kind === "recall"
+              ? "召回待确认预算？"
+              : action?.kind === "return"
+                ? "退回预算修改？"
+                : action?.kind === "clone"
+                  ? "保留原版并创建新版草稿？"
+                  : "确认预算操作？"
         }
         loading={busy}
         errorMessage={error}
@@ -470,7 +492,7 @@ export default function BudgetClient({
           <div className="stack">
             <p>
               {action && "plan" in action ? action.plan.title : title}
-              。提交后仅能由管家退回，已确认原版不可解锁。
+              。待确认可本人召回，已确认原版不可解锁；状态已变化时操作会被拒绝。
             </p>
             {["return", "archive", "remove_category"].includes(
               action?.kind || "",

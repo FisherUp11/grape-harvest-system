@@ -310,3 +310,97 @@ test("手机退回须原因、重新提交锁定和管家确认弹窗", async ({
     page.getByRole("button", { name: "退回修改", exact: true }),
   ).toHaveCount(0);
 });
+
+test("手机召回待确认记录后可编辑，按月计划只设置未来并可终止", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/consumptions");
+  await page.getByRole("button", { name: "召回修改", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已召回" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "修改", exact: true }),
+  ).toBeVisible();
+  await page.getByText("＋ 设置按月计划", { exact: true }).click();
+  await page.getByLabel("固定用途", { exact: true }).fill("每月固定生活");
+  await page.getByLabel("每月葡萄数", { exact: true }).fill("3000");
+  const future = `${new Date().getUTCFullYear() + 1}-02-01`;
+  await page.getByLabel("计划开始日期").fill(future);
+  await page.getByLabel("计划结束日期").fill(future.slice(0, 4) + "-06-30");
+  await page.getByLabel("每月几号").selectOption("5");
+  await page.getByRole("button", { name: "核对并创建计划" }).click();
+  await expect(page.getByRole("dialog")).toContainText("仅到期月份生成");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "计划已保存" }),
+  ).toBeVisible();
+  await expect(page.getByText("每月固定生活", { exact: true })).toBeVisible();
+  await page
+    .locator(".recurring-panel")
+    .screenshot({ path: "test-results/recurring-plan-mobile.png" });
+  await page.getByRole("button", { name: "终止后续计划" }).click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("终止原因（必填）")
+    .fill("事项终止");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await expect(page.getByText("已终止", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "终止后续计划" })).toHaveCount(
+    0,
+  );
+  await noOverflow(page);
+});
+
+test("固定吃可无凭证提交，已生效后可清晰压缩补传并提示永久留存", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/consumptions");
+  await page.getByLabel("葡萄数", { exact: true }).fill("3000");
+  await page
+    .getByRole("combobox", { name: "类型", exact: true })
+    .selectOption("fixed");
+  await page.getByLabel("用途说明").fill("固定后补凭证测试");
+  await page
+    .getByRole("combobox", { name: "预算科目（必选）", exact: true })
+    .selectOption("60000000-0000-0000-0000-000000000001");
+  await page.getByRole("button", { name: "核对并提交", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "提交成功" }),
+  ).toBeVisible();
+  await expect(page.getByText("待补凭证", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "补传凭证", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("不可删除、覆盖或替换");
+  await dialog.locator("input[type=file]").setInputFiles({
+    name: "supplement.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\nfixture\n%%EOF"),
+  });
+  await dialog.getByRole("button", { name: "确认上传并永久留存" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(
+    page.getByText("凭证已留存 · 不可删除", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "test-results/fixed-voucher-mobile.png",
+    fullPage: true,
+  });
+  await noOverflow(page);
+});

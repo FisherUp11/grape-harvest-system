@@ -36,6 +36,8 @@ test("每日任务鉴权、未配置邮件、发送与去重（网络全部模�
   globalThis.fetch = async (input, init) => {
     calls++;
     const url = String(input);
+    if (url.includes("/rpc/sync_recurring_consumptions"))
+      return new Response(JSON.stringify({ generated: 1, blocked: 0 }));
     if (url.includes("api.resend.com")) {
       sent++;
       assert.ok(new Headers(init?.headers).get("Idempotency-Key"));

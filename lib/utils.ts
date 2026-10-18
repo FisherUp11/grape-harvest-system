@@ -215,10 +215,13 @@ export function auditActionLabel(action: string) {
     record_corrections: "更正单",
     organizations: "农场",
     account: "账号",
+    recurring_consumption_plans: "按月固定计划",
+    grape_consumption_attachments: "吃葡萄凭证",
   };
   const verb: Record<string, string> = {
     insert: "新增",
     update: "更新",
+    recalled: "召回",
     delete: "删除",
     archived: "作废",
     assigned: "分配",
