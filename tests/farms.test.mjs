@@ -13,6 +13,7 @@ const owner = "10000000-0000-0000-0000-000000000001",
 test("三角色、多农场、审核状态机与容量（完整升级）", async (t) => {
   const db = new PGlite();
   t.after(() => db.close());
+  await db.exec("set timezone='Asia/Shanghai'");
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;create schema auth;create schema storage;
  create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz,encrypted_password text,raw_app_meta_data jsonb default '{}');
  create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
