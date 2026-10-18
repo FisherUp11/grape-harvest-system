@@ -1,14 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-const escapeHtml = (value: string) =>
-  value.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
-      ]!,
-  );
+import { accountWelcomeEmail } from "./emailTemplates";
 // 服务端入口完成身份与配置检查后调用；保持流程可用隔离 HTTP 测试验证。
 export async function processAccountRequest(
   request: Request,
@@ -112,8 +105,7 @@ export async function processAccountRequest(
         body: JSON.stringify({
           from: process.env.MAIL_FROM,
           to: [email],
-          subject: "你的葡萄农场账号已准备好",
-          html: `<p>欢迎进入葡萄农场。</p><p>账号：${escapeHtml(email)}</p><p>临时密码：<strong>${escapeHtml(password)}</strong></p><p><a href="${escapeHtml(site.href)}">登录葡萄农场</a></p><p>首次登录必须修改密码后才能使用系统。重发邮件会使此前的临时密码失效。</p>`,
+          ...accountWelcomeEmail({ email, password, loginUrl: site.href }),
         }),
       });
       if (!response.ok) throw new Error("发送失败");

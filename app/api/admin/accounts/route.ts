@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { processAccountRequest } from "@/lib/server/onboarding";
 import { requireEstateOwner, createServiceClient } from "@/lib/server/admin";
+import { isSameOriginRequest } from "@/lib/server/requestOrigin";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   let context;
@@ -9,10 +10,7 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "无权管理账号" }, { status: 403 });
   }
-  if (
-    request.headers.get("origin") &&
-    new URL(request.url).origin !== request.headers.get("origin")
-  )
+  if (!isSameOriginRequest(request))
     return NextResponse.json({ error: "请求来源不匹配" }, { status: 403 });
   if (
     !process.env.RESEND_API_KEY ||

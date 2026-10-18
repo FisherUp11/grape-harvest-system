@@ -1,5 +1,7 @@
 # 收葡萄系统部署指南
 
+`gr.fisherai6.top` 的 Cloudflare、Vercel、Resend、Supabase 控制台逐项填写说明见 [域名与邮件配置教程](GR_DOMAIN_EMAIL_SETUP.md)。重置密码 HTML 位于 `supabase/templates/recovery.html`，须粘贴到 Supabase 控制台才会生效。
+
 ## 数据库升级
 
 已有项目不要重跑 schema。新项目先在 Supabase SQL Editor 执行 `supabase/schema.sql`，再按文件名顺序执行 `supabase/migrations/20261017*.sql`。枚举扩展 `farm_roles` 必须单独执行并提交，然后执行 `farm_workflows`。旧 0002/0003 不应在全新 schema 上重复执行。
